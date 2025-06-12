@@ -24,7 +24,7 @@ export PATH
 # @madeye     <https://github.com/madeye>
 # @linusyang  <https://github.com/linusyang>
 # @Akkariiin  <https://github.com/Akkariiin>
-# 
+#
 # Intro:  https://teddysun.com/486.html
 
 red='\033[0;31m'
@@ -406,17 +406,29 @@ get_char(){
     stty "$SAVEDSTTY"
 }
 
+#
+# Enhanced error detection to show package manager output
+#
 error_detect_depends(){
     local command=$1
     local depend
     depend=$(echo "${command}" | awk '{print $4}')
-    echo -e "[${green}Info${plain}] Starting to install package ${depend}"
-    ${command} > /dev/null 2>&1
+    echo -e "[${green}Info${plain}] Installing dependency: ${depend}"
+
+    # Log command output to a file
+    local log_file="dependency_install.log"
+    ${command} > ${log_file} 2>&1
+
     if [ $? -ne 0 ]; then
-        echo -e "[${red}Error${plain}] Failed to install ${red}${depend}${plain}"
-        echo 'Please visit: https://teddysun.com/486.html and contact.'
+        echo -e "[${red}Error${plain}] Failed to install ${red}${depend}${plain}. Showing full log:"
+        echo "--------------------------------------------------"
+        cat ${log_file}
+        echo "--------------------------------------------------"
+        echo -e "[${red}Error${plain}] Please review the error message from your package manager above to diagnose the issue."
+        rm -f ${log_file}
         exit 1
     fi
+    rm -f ${log_file}
 }
 
 config_firewall(){
@@ -561,7 +573,7 @@ install_dependencies(){
         echo -e "[${green}Info${plain}] Checking the EPEL repository complete..."
 
         yum_depends=(
-            unzip gzip openssl openssl-devel gcc python python-devel python-setuptools pcre pcre-devel libtool libevent
+            unzip gzip openssl openssl-devel gcc python3 python3-devel python3-pip pcre pcre-devel libtool libevent
             autoconf automake make curl curl-devel zlib-devel perl perl-devel cpio expat-devel gettext-devel
             libev-devel c-ares-devel git qrencode
         )
@@ -569,12 +581,11 @@ install_dependencies(){
             error_detect_depends "yum -y install ${depend}"
         done
     elif check_sys packageManager apt; then
+        apt-get -y update
         apt_depends=(
-            gettext build-essential unzip gzip python python-dev python-setuptools curl openssl libssl-dev
+            gettext build-essential unzip gzip python3 python3-dev python3-setuptools python3-pip curl openssl libssl-dev
             autoconf automake libtool gcc make perl cpio libpcre3 libpcre3-dev zlib1g-dev libev-dev libc-ares-dev git qrencode
         )
-
-        apt-get -y update
         for depend in ${apt_depends[@]}; do
             error_detect_depends "apt-get -y install ${depend}"
         done
@@ -890,10 +901,21 @@ install_shadowsocks_python(){
     fi
 
     cd ${shadowsocks_python_file} || exit
-    python setup.py install --record /usr/local/shadowsocks_python.log
+    
+    # Use pip3 for a more reliable installation
+    echo "Installing Shadowsocks for Python 3 using pip..."
+    pip3 install . --user
+    
+    # Add local user bin to PATH if it exists
+    if [ -d "$HOME/.local/bin" ]; then
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
 
-    if [ -f /usr/bin/ssserver ] || [ -f /usr/local/bin/ssserver ]; then
+    if [ -f "$HOME/.local/bin/ssserver" ]; then
         chmod +x ${shadowsocks_python_init}
+        # Update init script to use the correct ssserver path
+        sed -i "s|/usr/bin/ssserver|$HOME/.local/bin/ssserver|g" ${shadowsocks_python_init}
+
         local service_name
         service_name=$(basename ${shadowsocks_python_init})
         if check_sys packageManager yum; then
@@ -904,12 +926,13 @@ install_shadowsocks_python(){
         fi
     else
         echo
-        echo -e "[${red}Error${plain}] ${software[0]} install failed."
-        echo 'Please visit: https://teddysun.com/486.html and contact.'
+        echo -e "[${red}Error${plain}] ${software[0]} install failed. ssserver not found."
+        echo "Please check the installation logs."
         install_cleanup
         exit 1
     fi
 }
+
 
 install_shadowsocks_r(){
     cd "${cur_dir}" || exit
@@ -1213,11 +1236,12 @@ uninstall_shadowsocks_python(){
             update-rc.d -f "${service_name}" remove
         fi
 
+        # Uninstall with pip3
+        pip3 uninstall -y shadowsocks
         rm -fr $(dirname ${shadowsocks_python_config})
         rm -f ${shadowsocks_python_init}
         rm -f /var/log/shadowsocks.log
         if [ -f /usr/local/shadowsocks_python.log ]; then
-            cat /usr/local/shadowsocks_python.log | xargs rm -rf
             rm -f /usr/local/shadowsocks_python.log
         fi
         echo -e "[${green}Info${plain}] ${software[0]} uninstall success"
